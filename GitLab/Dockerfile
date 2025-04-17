@@ -1,35 +1,64 @@
 FROM ubuntu:24.04
 
-# Configure file for gitlab
+# Base directory for startup and configuration scripts
+ARG BASE_SCRIPTS_DIR=/startScript
+
+# Directory with configuration scripts to be executed.
+# This is mounted in docker-compose, which allows dynamically adding new scripts
+# without rebuilding the image. Scripts are moved here from init folder at runtime.
+ENV CONFIGURE_SCRIPTS_TO_EXECUTE=/gitlab-init-config
+
+# Directory to store already executed configuration scripts.
+ENV CONFIGURE_SCRIPTS_TO_DONE=/gitlab-init-config.done
+
+
+# Path to GitLab's main configuration file
 ENV CONFIG_FILE=/etc/gitlab/gitlab.rb
-# Domain can use only: RUN, CMD, ENTRYPOINT, ENV
+
+# Domain for GitLab instance (used in SSL certificate and configuration)
 ENV DOMAIN=gitlab.company.local
+
+# IP address to identify container (optional use case)
 ENV CONTAINER_ID=172.0.10.3
 
-
+# Install basic tools
 RUN apt-get update
 RUN apt-get install -y nano
 # we not use ex
 # RUN apt-get -y --no-install-recommends install vim-tiny
 RUN apt-get install -y curl openssh-server ca-certificates tzdata perl
+
+# Add GitLab repository and install GitLab CE
 RUN curl -s https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | bash
 RUN apt install sysvinit-utils
 RUN apt-get install gitlab-ce
-#Need to start gitlab
+# Need to start gitlab
 RUN apt install -y logrotate
 
+# Install minimal netcat version for simple port checks
+RUN apt-get install -y netcat-traditional
+
+# [Alternative] Uncomment below if you need more advanced netcat version (e.g., for CI/CD)
+# (e.g., with better timeout support or in CI/CD environments)
+# RUN apt-get install -y netcat-openbsd
+
+# Firest wersion without ssl
 # Used sed because can't change separator in command ex with / to | (in my example)to not escape characters in https address
 # RUN LOCAL_DOMAIN=$CONTAINER_ID && sed -i "s|^external_url.*|external_url 'http://"$LOCAL_DOMAIN"'|" $CONFIG_FILE
 
-# ADDED ssl_certificate for local domain: gitlab.company.local
+# --- SSL CONFIGURATION ---
+
+# Install OpenSSL and prepare SSL folder
 RUN apt install openssl -y
 RUN mkdir -p /etc/gitlab/ssl
 RUN chmod 700 /etc/gitlab/ssl
 
+# Generate self-signed certificate for local domain
 RUN openssl req -newkey rsa:2048 -nodes -keyout /etc/gitlab/ssl/gitlab.company.local.key \
 -x509 -days 3650 -out /etc/gitlab/ssl/gitlab.company.local.crt \
 -subj "/C=PL/ST=Test/L=Test/O=Local/CN=gitlab.company.local"
 
+# Inject SSL configuration and other settings into gitlab.rb
 RUN LOCAL_DOMAIN=$DOMAIN && \
         # CONFIG_FILE="/etc/gitlab/gitlab-test.rb" &&  for testing when copy past to comandline ind container and remember to change $Domain to gitlab.company.local
         # Add variable if not exist
@@ -46,22 +75,30 @@ RUN LOCAL_DOMAIN=$DOMAIN && \
         # key
         sed -i "s|^# *nginx\['ssl_certificate_key'\].*|nginx['ssl_certificate_key'] = \"/etc/gitlab/ssl/\#{my_gitlab_domain}.key\"|" "$CONFIG_FILE" && \
         grep -q "nginx\['ssl_certificate_key'\]" "$CONFIG_FILE" || echo "nginx['ssl_certificate_key'] = \"/etc/gitlab/ssl/\#{my_gitlab_domain}.key\"" >> "$CONFIG_FILE"
-    
 
+# --- END SSL CONFIGURATION ---
 
-# END ADDED ssl_certificate
-
-
-#beckup when mount this directory
+# Save backup of gitlab.rb when mounting config
 RUN cp $CONFIG_FILE /tmp/gitlab.rb
 
-COPY startGitLab.sh /startGitLab.sh
-RUN chmod +x /startGitLab.sh
+# Create necessary directories
+RUN mkdir ${BASE_SCRIPTS_DIR}
+RUN mkdir ${CONFIGURE_SCRIPTS_TO_EXECUTE}
+RUN mkdir ${CONFIGURE_SCRIPTS_TO_DONE}
 
-# TODO:
-    # 1. add ssh certificate
-    # 2. add login to ssh to container
-    # 3. add email configuration
+# Copy startup script
+COPY startGitLab.sh ${BASE_SCRIPTS_DIR}/startGitLab.sh
+RUN chmod +x ${BASE_SCRIPTS_DIR}/startGitLab.sh
 
+# Copy configuration execution script
+COPY init.scripts.sh ${BASE_SCRIPTS_DIR}/init.scripts.sh
+RUN chmod +x ${BASE_SCRIPTS_DIR}/init.scripts.sh
+
+# Open required ports
 EXPOSE 80 22 443
-CMD ["/startGitLab.sh", "-D"]
+
+# Default command (runs GitLab and configuration scripts)
+CMD ["/startScript/startGitLab.sh", "-D"]
+
+# Alternative: keep container running without starting GitLab (for debugging)
+# CMD ["tail", "-f", "/dev/null"]

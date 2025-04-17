@@ -1,6 +1,8 @@
 services:
   gitlab_server:
-    build: GitLab/.
+    build: 
+      context: ./GitLab
+      dockerfile: Dockerfile
     container_name: GitLabCE
     image: gitlab-ce-ubuntu
     tty: true
@@ -19,6 +21,8 @@ services:
       - './storage/gitlab/config:/etc/gitlab'
       - './storage/gitlab/logs:/var/log/gitlab'
       - './storage/gitlab/data:/var/opt/gitlab'
+      - './storage/gitlab/init.scripts:/gitlab-init-config'
+      - './storage/gitlab/init.scripts.done:/gitlab-init-config.done'
     shm_size: '256m'
     networks:
       cicd-networks:
