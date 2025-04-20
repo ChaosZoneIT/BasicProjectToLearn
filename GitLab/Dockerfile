@@ -3,17 +3,19 @@ FROM ubuntu:24.04
 # Base directory for startup and configuration scripts
 ARG BASE_SCRIPTS_DIR=/startScript
 
+ARG CONFIGURATION_DIR=/gitlab-config
+ENV CONFIGURE_BEFORE_START=${CONFIGURATION_DIR}/before
+ENV CONFIGURE_BEFORE_START_DONE=${CONFIGURATION_DIR}/before-done
 # Directory with configuration scripts to be executed.
 # This is mounted in docker-compose, which allows dynamically adding new scripts
 # without rebuilding the image. Scripts are moved here from init folder at runtime.
-ENV CONFIGURE_SCRIPTS_TO_EXECUTE=/gitlab-init-config
-
+ENV CONFIGURE_AFTER_START=${CONFIGURATION_DIR}/after
 # Directory to store already executed configuration scripts.
-ENV CONFIGURE_SCRIPTS_TO_DONE=/gitlab-init-config.done
-
+ENV CONFIGURE_AFTER_START_DONE=${CONFIGURATION_DIR}/after-done
 
 # Path to GitLab's main configuration file
 ENV CONFIG_FILE=/etc/gitlab/gitlab.rb
+ENV CONFIG_FILE_TMP=/tmp/gitlab.rb
 
 # Domain for GitLab instance (used in SSL certificate and configuration)
 ENV DOMAIN=gitlab.company.local
@@ -79,20 +81,29 @@ RUN LOCAL_DOMAIN=$DOMAIN && \
 # --- END SSL CONFIGURATION ---
 
 # Save backup of gitlab.rb when mounting config
-RUN cp $CONFIG_FILE /tmp/gitlab.rb
+RUN cp $CONFIG_FILE $CONFIG_FILE_TMP
 
 # Create necessary directories
 RUN mkdir ${BASE_SCRIPTS_DIR}
-RUN mkdir ${CONFIGURE_SCRIPTS_TO_EXECUTE}
-RUN mkdir ${CONFIGURE_SCRIPTS_TO_DONE}
+
+
+RUN mkdir ${CONFIGURATION_DIR}
+RUN mkdir ${CONFIGURE_BEFORE_START}
+RUN mkdir ${CONFIGURE_BEFORE_START_DONE}
+RUN mkdir ${CONFIGURE_AFTER_START}
+RUN mkdir ${CONFIGURE_AFTER_START_DONE}
+
 
 # Copy startup script
 COPY startGitLab.sh ${BASE_SCRIPTS_DIR}/startGitLab.sh
 RUN chmod +x ${BASE_SCRIPTS_DIR}/startGitLab.sh
 
 # Copy configuration execution script
-COPY init.scripts.sh ${BASE_SCRIPTS_DIR}/init.scripts.sh
-RUN chmod +x ${BASE_SCRIPTS_DIR}/init.scripts.sh
+COPY configure-before-start.sh ${BASE_SCRIPTS_DIR}/configure-before-start.sh
+RUN chmod +x ${BASE_SCRIPTS_DIR}/configure-before-start.sh
+
+COPY configure-after-start.sh ${BASE_SCRIPTS_DIR}/configure-after-start.sh
+RUN chmod +x ${BASE_SCRIPTS_DIR}/configure-after-start.sh
 
 # Open required ports
 EXPOSE 80 22 443

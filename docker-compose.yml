@@ -21,12 +21,24 @@ services:
       - './storage/gitlab/config:/etc/gitlab'
       - './storage/gitlab/logs:/var/log/gitlab'
       - './storage/gitlab/data:/var/opt/gitlab'
-      - './storage/gitlab/init.scripts:/gitlab-init-config'
-      - './storage/gitlab/init.scripts.done:/gitlab-init-config.done'
+      - './storage/gitlab/config-before-start:/gitlab-config/before'
+      - './storage/gitlab/config-before-start-done:/gitlab-config/before-done'
+      - './storage/gitlab/config-after-start:/gitlab-config/after'
+      - './storage/gitlab/config-after-start-done:/gitlab-config/after-done'
     shm_size: '256m'
     networks:
       cicd-networks:
         ipv4_address: 172.0.10.3
+  mailhog:
+    image: mailhog/mailhog
+    container_name: Mailhog
+    restart: always
+    ports:
+      - "8025:8025"   # Web UI
+      - "1025:1025"   # SMTP
+    networks:
+      cicd-networks:
+        ipv4_address: 172.0.10.4
 
 networks:
   cicd-networks:

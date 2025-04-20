@@ -5,8 +5,6 @@
 # storage/
 storage/*
 
-# Exclude storage/gitlab/init.scripts from being ignored
-!storage/gitlab/init.scripts/
 
-# Include all files inside the storage/gitlab/init.scripts directory
-!storage/gitlab/init.scripts/*
+!storage/gitlab/config-after-start/.gitkeep 
+!storage/gitlab/config-before-start/.gitkeep
