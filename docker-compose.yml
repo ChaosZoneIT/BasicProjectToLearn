@@ -1,4 +1,20 @@
 services:
+  nginx_reverse_proxy:
+    image: nginx:latest
+    container_name: nginxReverseProxy
+    restart: always
+    networks:
+      cicd-networks:
+        ipv4_address: 172.0.10.2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - './storage/ssl/gitlab:/etc/nginx/ssl'
+      - './storage/nginxReverseProxy/config/nginx.conf:/etc/nginx/nginx.conf'
+    depends_on:
+      - gitlab_server
+      - mailhog
   gitlab_server:
     build: 
       context: ./GitLab
@@ -7,18 +23,19 @@ services:
     image: gitlab-ce-ubuntu
     tty: true
     restart: always
-    # hostname: 'gitlab.example.com'
+    hostname: 'gitlab.company.local'
     # environment:
     #   GITLAB_OMNIBUS_CONFIG: |
     #     # Add any other gitlab.rb configuration here, each on its own line
     #     external_url 'https://gitlab.example.com:8001' '8001:80'
     #     gitlab_rails['gitlab_shell_ssh_port'] = 2424
     # ports:
-    #   - '80:80'
-    #   - '4431:443'
-    #   - '2424:22'
+    #   - '8080:80'
+    #   - '443:443'
+    #   - '22:22'
     volumes:
-      - './storage/gitlab/config:/etc/gitlab'
+      - './storage/gitlab/config:/etc/gitlab' # everything except the certificate folder
+      - './storage/ssl/gitlab:/etc/gitlab/ssl' # only ssl
       - './storage/gitlab/logs:/var/log/gitlab'
       - './storage/gitlab/data:/var/opt/gitlab'
       - './storage/gitlab/config-before-start:/gitlab-config/before'
@@ -33,9 +50,9 @@ services:
     image: mailhog/mailhog
     container_name: Mailhog
     restart: always
-    ports:
-      - "8025:8025"   # Web UI
-      - "1025:1025"   # SMTP
+    # ports:
+    #   - "8025:8025"   # Web UI
+    #   - "1025:1025"   # SMTP
     networks:
       cicd-networks:
         ipv4_address: 172.0.10.4

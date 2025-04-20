@@ -25,6 +25,30 @@ else
     echo "[SKIP] Configuration already exists. Skipping restore from backup."
 fi
 
+# Copy ssl certificate after create volume
+# Check if the destination directory exists and is empty
+if [ -d "$SSL_CERTIFICATE_DIR" ] && [ "$(ls -A $SSL_CERTIFICATE_DIR)" ]; then
+    # If the destination directory is not empty, skip the copying process
+    echo "Directory $SSL_CERTIFICATE_DIR is not empty, skipping certificate copy."
+else
+    # If the destination directory is empty or doesn't exist, create it
+    mkdir -p $SSL_CERTIFICATE_DIR
+
+    # Copy certificates from the source directory to the destination directory
+    echo "Copying certificates from $SOURCE_DIR to $SSL_CERTIFICATE_DIR..."
+    cp -r $SSL_CERTIFICATE_DIR_TMP/* $SSL_CERTIFICATE_DIR/
+
+    # Check if the copy command was successful
+    if [ $? -eq 0 ]; then
+        # If successful, print a success message
+        echo "Certificates copied successfully."
+    else
+        # If there was an error, print an error message and exit with a non-zero status
+        echo "Error occurred while copying certificates."
+        exit 1
+    fi
+fi
+
 # Run additional configuration scripts
 echo "[2/5] Running init scripts..."
 bash /startScript/configure-before-start.sh
