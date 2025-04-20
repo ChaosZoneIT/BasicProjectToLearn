@@ -23,6 +23,12 @@ ENV DOMAIN=gitlab.company.local
 # IP address to identify container (optional use case)
 ENV CONTAINER_ID=172.0.10.3
 
+# Destination directory for GitLab certificates
+ENV SSL_CERTIFICATE_DIR=/etc/gitlab/ssl
+# Temporary directory where certificates are stored
+ENV SSL_CERTIFICATE_DIR_TMP=/ssl
+
+
 # Install basic tools
 RUN apt-get update
 RUN apt-get install -y nano
@@ -52,12 +58,14 @@ RUN apt-get install -y netcat-traditional
 
 # Install OpenSSL and prepare SSL folder
 RUN apt install openssl -y
-RUN mkdir -p /etc/gitlab/ssl
-RUN chmod 700 /etc/gitlab/ssl
+RUN mkdir -p ${SSL_CERTIFICATE_DIR}
+RUN chmod 700 ${SSL_CERTIFICATE_DIR}
+RUN mkdir -p ${SSL_CERTIFICATE_DIR_TMP}
+RUN chmod 700 ${SSL_CERTIFICATE_DIR_TMP}
 
 # Generate self-signed certificate for local domain
-RUN openssl req -newkey rsa:2048 -nodes -keyout /etc/gitlab/ssl/gitlab.company.local.key \
--x509 -days 3650 -out /etc/gitlab/ssl/gitlab.company.local.crt \
+RUN openssl req -newkey rsa:2048 -nodes -keyout /ssl/gitlab.company.local.key \
+-x509 -days 3650 -out /ssl/gitlab.company.local.crt \
 -subj "/C=PL/ST=Test/L=Test/O=Local/CN=gitlab.company.local"
 
 # Inject SSL configuration and other settings into gitlab.rb
