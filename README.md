@@ -16,30 +16,109 @@ Cała struktura systemu opiera się na kontenerach Docker, które **symulują ma
 
 Projekt składa się z kilku etapów, a cała struktura jest budowana za pomocą **Docker Compose**, w którym zdefiniowana jest sieć oraz serwisy odpowiadające za usługi, narzędzia i "serwery". Ta część projektu będzie się rozrastała wraz z kolejnymi zmianami i dodatkami do infrastruktury.
 
-### 1. Nginx jako Reverse Proxy (TODO)
+### 1. Nginx jako Reverse Proxy
 
-Nginx działa jako **reverse proxy**, które przekierowuje ruch z różnych domen do odpowiednich serwisów uruchomionych w kontenerach Docker. Dzięki tej konfiguracji możliwe jest udostępnienie różnych aplikacji na tym samym porcie, ale różnymi domenami. Nginx na podstawie domeny przekierowuje ruch do odpowiedniego serwisu, działającego w środowisku Docker Compose.
+Reverse proxy obsługiwany przez serwis `nginxReverseProxy`  
+Oparty na obrazie `nginx:latest`, uruchomiony w kontenerze Docker  
+Zaprojektowany do obsługi wielu domen kierujących na różne usługi uruchomione w ramach Docker Compose
+
+#### Główne cechy
+
+- Umożliwia dostęp do serwisów bez konieczności podawania portu (np. `http://email.company.local` zamiast `http://localhost:8025`)
+- Rozpoznaje serwisy po domenie i przekazuje ruch do odpowiednich kontenerów
+- Obsługuje zarówno ruch HTTP, jak i HTTPS (z lokalnymi certyfikatami SSL)
+
+#### Domeny i routing
+
+| Domena                  | Usługa docelowa | Protokół | Certyfikat SSL | Uwagi                                               |
+|-------------------------|------------------|----------|----------------|-----------------------------------------------------|
+| `email.company.local`   | MailHog          | HTTP     | Nie             | Do testowania wiadomości e-mail                    |
+| `gitlab.company.local`  | GitLab CE        | HTTPS    | Tak             | Reverse proxy z terminacją SSL w Nginx             |
+
+#### Certyfikaty SSL
+
+- Lokalnie wygenerowane, samopodpisane certyfikaty umieszczone są w katalogu `storage/ssl/[usługa]/`
+- W przypadku GitLaba – certyfikat znajduje się zarówno na serwerze GitLab (`/etc/gitlab/ssl`), jak i w kontenerze Nginx (`/etc/nginx/ssl`)
+
+#### Dodatkowe informacje
+
+- Nginx wykonuje terminację SSL (SSL termination) – tzn. odbiera ruch HTTPS, a następnie przekazuje go do wewnętrznej usługi jako HTTP lub HTTPS w zależności od konfiguracji (chwilowo przekazuje tylko po HTTPS)
+- W przyszłości możliwe dodanie TLS passthrough dla wybranych usług (np. Jenkins, SonarQube)
+
+#### Struktura domen i certyfikatów
+
+Każda usługa w środowisku deweloperskim ma przypisaną domenę lokalną.  
+Certyfikaty SSL (jeśli wymagane) są generowane lokalnie i przechowywane centralnie w `storage/ssl`.
+
+##### Przykładowe mapowanie
+
+| Usługa      | Domena lokalna          | Certyfikat SSL        | Obsługa przez Nginx | Port docelowy |
+|-------------|--------------------------|------------------------|----------------------|---------------|
+| GitLab CE   | gitlab.company.local     | `gitlab.company.local.crt` | Tak                  | 443           |
+| MailHog     | email.company.local      | Brak                   | Tak                  | 8025          |
+
+> *Wszystkie domeny lokalne są obsługiwane przez Nginx jako reverse proxy.*  
+> *W przypadku certyfikatów – terminacja SSL odbywa się w kontenerze Nginx.*
+
+#### Architektura sieci i bezpieczeństwo
+
+Schemat działania (logiczny)
+
+``` bash
+    ┌────────────────────────────┐
+    │        Przeglądarka        │
+    │ (np. gitlab.company.local) │
+    └────────────┬───────────────┘
+                 │ HTTPS / HTTP
+                 ▼
+┌────────────────────────────────────┐
+│                Nginx               │
+│           (Reverse Proxy)          │
+│  - Odbiera ruch (443/80)           │
+│  - Terminacja SSL (jeśli włączona) │
+│  - Routing po domenie              │
+└────────────────┬───────────────────┘
+                 │
+     ┌───────────┴────┬─────────────┐
+     ▼                ▼             ▼
+┌────────────┐ ┌────────────┐ ┌─────────────┐
+│   GitLab   │ │   MailHog  │ │ Inny serwis │
+│  (HTTPS)   │ │   (HTTP)   │ │(np. Jenkins)│
+└────────────┘ └────────────┘ └─────────────┘
+```
 
 ### 2. GitLab CE
 
-- Oparty na systemie **Ubuntu 24.04**
-- Dostępny przez **HTTPS** (z lokalnym, samopodpisanym certyfikatem SSL)
-- **Zablokowana rejestracja użytkowników** – tylko administrator może tworzyć konta
-- Wymagana **weryfikacja adresu e-mail** przed uzyskaniem dostępu do repozytoriów
-- Planowana struktura grup/projektów:
-  - Dwa zespoły developerskie (Dev)
-  - Jeden zespół DevOps
-  - Testerzy (docelowo 2 osoby, z możliwością uruchamiania własnych środowisk testowych)
-  - Osoba odpowiedzialna za wdrożenia na środowisko produkcyjne
+GitLab CE to centralna platforma zarządzania kodem źródłowym i współpracy zespołów programistycznych. W tym projekcie został uruchomiony w kontenerze opartym na systemie **Ubuntu 24.04**. Dostęp do GitLaba odbywa się przez **HTTPS** z wykorzystaniem **lokalnego, samopodpisanego certyfikatu SSL**, co zapewnia szyfrowane połączenie z interfejsem użytkownika.
+
+W celu zwiększenia kontroli dostępu oraz bezpieczeństwa:
+
+- **Rejestracja użytkowników została wyłączona** – konta tworzy wyłącznie administrator.
+- Użytkownicy muszą **zweryfikować swój adres e-mail**, zanim uzyskają dostęp do repozytoriów.
+
+Struktura organizacyjna w GitLabie odwzorowuje typowy podział zespołów w firmie IT <span style="color:orange;">(TODO)</span>:
+
+- **Dwa zespoły developerskie (Dev)** – każdy pracuje nad własnymi projektami.
+- **Zespół DevOps** – odpowiedzialny za automatyzację procesów CI/CD.
+- **Testerzy** – docelowo 2 osoby z możliwością uruchamiania własnych środowisk testowych.
+- **Osoba odpowiedzialna za wdrożenia** – zarządza publikacją kodu na środowisku produkcyjnym.
+
+To podejście umożliwia pełne przetestowanie scenariuszy zarządzania użytkownikami, dostępami oraz procesem wytwarzania oprogramowania w zbliżonych do rzeczywistych warunkach.
+
 
 ### 3. Mock serwer SMTP (MailHog)
 
-- Symuluje odbiór wiadomości e-mail:
-  - rejestracja / aktywacja konta
-  - powiadomienia z pipeline'ów
-  - inne systemowe powiadomienia z GitLaba
+MailHog działa jako **symulator serwera poczty SMTP**, umożliwiając przechwytywanie i podgląd wiadomości e-mail wysyłanych przez inne systemy (np. GitLab). Usługa działa w osobnym kontenerze i jest dostępna lokalnie przez przeglądarkę przy użyciu protokołu HTTP.
 
-### 4. Przykładowy projekt (TODO)
+W tym środowisku MailHog odpowiada za obsługę wiadomości związanych z działaniem GitLaba, w tym:
+
+- Wiadomości e-mail związane z **rejestracją i aktywacją kont**
+- **Powiadomienia z pipeline'ów** CI/CD
+- Inne **systemowe wiadomości** (np. komentarze, zmiany w repozytorium)
+
+Dzięki zastosowaniu MailHoga możliwe jest testowanie funkcjonalności e-mailowych bez ryzyka przypadkowej wysyłki na rzeczywiste adresy oraz bez potrzeby konfigurowania prawdziwego serwera SMTP.
+
+### 4. Przykładowy projekt <span style="color:orange;">(TODO)</span>
 
 Repozytorium będzie zawierać przykładowy projekt:
 
@@ -65,19 +144,26 @@ Testy będą uruchamiane automatycznie w pipeline GitLaba jako demonstracja dzia
 │   ├── configure-befor-start.sh              # Skrypt sprawdzający gotowość GitLaba i uruchamiający konfigurację z katalogu /gitlab-config/befor (na dokerze)
 │   ├── Dockerfile                            # Obraz bazujący na Ubuntu 24 z preinstalowanym GitLabem
 │   └── startGitLab.sh                        # Skrypt startujący GitLaba oraz konfigurujący całe srodowiski
+├── nginxReverseProxy/
+│   └── config/                               # Katalog z domyślną konfiguracją na ngnix
 ├── storage/
 │   └── gitlab/                               # Wolumeny powiązane z GitLabem (logi, dane, konfiguracja, itp.)
-│       ├── config/                           # podmontowany folder z dockera (/etc/gitlab)
-│       ├── config-after-start/               # podmontowany katalog do kontenera (/gitlab-config/after). Do niego należy skopiować skrypty konfigurujące które powinny się uruchomić po starcie gitLaba
-│       │   └── .gitkeep                      # plik aby dało się wysłać folder do github
-│       ├── config-after-start-done          # podmontowany folder z dockera (/gitlab-config/after-done) Przechowujący wykonane skrypty aby nie dublować konfiguracji przy kolejnych startach kontenera która jest już zapisana np w redisie
-│       ├── config-before-start/              # podmontowany katalog do kontenera (/gitlab-config/before). Do niego należy skopiować skrypty konfigurujące które powinny się uruchomić przed startem gitLaba (np ustawiające dane w /ets/gitlab/gitlab.rb)
-│       │   └── .gitkeep                      # plik aby dało się wysłać folder do github
-│       ├── config-before-start-done          # podmontowany folder z dockera (/gitlab-config/before-done) Przechowujący wykonane skrypty aby nie dublować konfiguracji przy kolejnych startach kontenera która jest już zapisana np w pliku /etc/gitlab/gitlab.rb
-│       ├── data                              # podmontowany folder z dockera (/var/opt/gitlab)
-│       └── logs                              # podmontowany folder z dockera (/var/log/gitlab)
+│   │   ├── config/                           # podmontowany folder z dockera (/etc/gitlab)
+│   │   ├── config-after-start/               # podmontowany katalog do kontenera (/gitlab-config/after). Do niego należy skopiować skrypty konfigurujące które powinny się uruchomić po starcie gitLaba
+│   │   │   └── .gitkeep                      # plik aby dało się wysłać folder do github
+│   │   ├── config-after-start-done          # podmontowany folder z dockera (/gitlab-config/after-done) Przechowujący wykonane skrypty aby nie dublować konfiguracji przy kolejnych startach kontenera która jest już zapisana np w redisie
+│   │   ├── config-before-start/              # podmontowany katalog do kontenera (/gitlab-config/before). Do niego należy skopiować skrypty konfigurujące które powinny się uruchomić przed startem gitLaba (np ustawiające dane w /ets/gitlab/gitlab.rb)
+│   │   │   └── .gitkeep                      # plik aby dało się wysłać folder do github
+│   │   ├── config-before-start-done          # podmontowany folder z dockera (/gitlab-config/before-done) Przechowujący wykonane skrypty aby nie dublować konfiguracji przy kolejnych startach kontenera która jest już zapisana np w pliku /etc/gitlab/gitlab.rb
+│   │   ├── data                              # podmontowany folder z dockera (/var/opt/gitlab)
+│   │   └── logs                              # podmontowany folder z dockera (/var/log/gitlab)
+│   ├── nginxReverseProxy/                    # Wolumeny powiązane z ngnix (konfiguracja)
+│   │   └── config/                           # Konfiguracja
+│   └── ssl/                                  # Wolumeny powiązane z certyfikatami (np nginx i gitlab korzystają z tego samego dla domeny gitlab.company.local)
+│       └── gitlab/                           # Certyfikaty związane z gitLab'em  
 ├── tools/                                    # Narzędzia do konfiguracji
-│   └── gitlab/                               # dla gitLaba
+│   ├── gitlab/                               # dla gitLab'a
+│   └── nginxReverseProxy/                    # dla ngnix'a
 ├── .gitignore
 ├── docker-compose.yml                        # Główny plik uruchamiający środowisko
 └── Makefile                                  # Automatyzuje zadania konfiguracyjne (zawarte w tools/)
@@ -102,10 +188,11 @@ sudo nano /etc/hosts
 ```
 
 ``` bash
-172.0.10.3 gitlab.company.local
+172.0.10.2 gitlab.company.local
+172.0.10.2 email.company.local
 ```
 
-📌 **Adres IP** odpowiada ustawieniu statycznego IP kontenera w pliku `docker-compose.yml`.
+📌 **Jeden adres IP dla wszystkich domen**  Nginx działa jako Reverse Proxy aby można sprawdzać usługi nie podając portów co w późniejszym czasie może być uciążliwe (becenie są tylko 2)
 
 ### 2. 🛠️ Budowanie i uruchomienie projektu
 
@@ -114,8 +201,11 @@ W katalogu głównym projektu (pierwsze uruchomienie po pobraniu):
 #### 2.1 Kopiujemy skrypty konfiguracyjne za pomocą polecenia
 
 ``` bash
+make startConfigurationAll
+lub pojedyńczo:
 make gitLab-copy-configuration-before-start
 make gitLab-copy-configuration-after-start
+mahe nginx-copy-config
 ```
 
 lub
@@ -123,19 +213,20 @@ lub
 ``` bash
 ./tools/gitlab/copy-config-before.sh
 ./tools/gitlab/copy-config-after.sh
+./tools/nginxReverseProxy/copy-configuration.sh
 ```
 
 Powyższe polecenia kopiują(na hoscie) przykładową konfigurację z
 
-- GitLab/config/after-satrt
-- GitLab/config/before-satrt
+- GitLab/config/after-satrt/
+- GitLab/config/before-satrt/
+- nginxReverseProxy/config/
 
 do (który jest podmontowany do kontenera):
 
-- store/gitlab/config-after-start
-- store/gitlab/config-before-start
-
-Skrypty są uniwersalne i powinny zadziałać na każdym środowisku na którym chce sie skonfigurować GitLaba, dlatego są w sekcji GirLab.
+- store/gitlab/config-after-start/
+- store/gitlab/config-before-start/
+- store/nginxReverseProxy/confing/
 
 #### 2.2 Budujemy projekt
 
@@ -175,6 +266,7 @@ docker ps -a --filter "name=Mailhog"    # czy przypadkiem nie został kontener
 docker rm GitLabCE Mailhog              # usunięcie kontenerów jakby zostały
 docker rmi gitlab-ce-ubuntu:latest      # usunięcie obrazu
 docker rmi mailhog/mailhog:latest       # usunięcie obrazu
+docker rmi nginx:latest                 # usunięcie obrazu
 ```
 
 ### 3.1 Porządek z volumenami i konfiguracją (z głownego katalogu projektu)
@@ -182,18 +274,45 @@ docker rmi mailhog/mailhog:latest       # usunięcie obrazu
 Usuwa wszystko z storage/gitlab i przywracastan projektu który można budować i uruchamiać (można przeskoczyć do punku [2.2 Budujemy projekt](#22-budujemy-projekt))
 
 ``` bash
-make gitLab
+make cleanAll
+make startConfigurationAll
 # lub pojedyńco uruchamiać w takiej kolejności:
 ./tools/gitlab/clean-storage.sh
 ./tools/gitlab/clean-before-config.sh
 ./tools/gitlab/clean-after-config.sh
+./tools/remove-cert-ssl.sh
+./tools/nginxReverseProxy/clean-nginx-storage.sh
 ./tools/gitlab/copy-config-before.sh
 ./tools/gitlab/copy-config-after.sh
+./tools/nginxReverseProxy/copy-configuration.sh
+
 ```
 
 ### 3.2 pojedyńcze porządki (z głownego katalogu projektu)
 
-### 3.2.1 Usuwa zawartość storage/gitlab/ poza konfiguracją
+### 3.2.1 Ogólne
+
+#### 3.2.1.1 Usuwa certyfikatów
+
+``` bash
+make remove-ssl-cert
+lub
+./tools/remove-cert-ssl.sh
+```
+
+### 3.2.2 Ngnix
+
+#### 3.2.2.1 Usuwa konfiguracji nginx (z przekierowaniami)
+
+``` bash
+make nginx-clean
+lub
+./tools/nginxReverseProxy/clean-nginx-storage.sh
+```
+
+### 3.2.3 Gitlab
+
+#### 3.2.3.1 Usuwa zawartość storage/gitlab/ poza konfiguracją
 
 Przy starcie projektu się wykona konfiguracja ponieważ zostały tylko foldery config-after-satrt i config-before-start (można wrócić do [2.2 Budujemy projekt](#22-budujemy-projekt))
 
@@ -203,7 +322,7 @@ make gitLab-clean-storage
 ./tools/gitlab/clean-storage.sh
 ```
 
-### 3.2.2 Usuwa zawartość konfiguracji before/after
+#### 3.2.3.2 Usuwa zawartość konfiguracji before/after
 
 Usuwa konfigurację którą należy wykonać (usuwa tylko z katalogu który jest podmontowany do dockera). Zostawia tylko plik .gitkeep (ten który jest również w repozytorium przy pobieraniu projektu)
 
@@ -215,7 +334,7 @@ make gitLab-clean-configuration-after-start
 ./tools/gitlab/clean-after-config.sh
 ```
 
-📌 Pamiętaj: Samo usnięcie z tego katalogu ma mały sens ponieważ cały czas zostaje folder z wykonanymi skryptami i jak się nawet je ponownie wrzuci to i tak nie zostaną wykonane przy starcie kntenera.
+📌 Pamiętaj: Uporządkowanie tego katalogu pozwala zaoszczędzić miejsce, ponieważ powyższe skrypty się już wykonały, i ich stan jest zapisany w konfiguracji/bazie danych/redis GitLaba. Po ponownym wrzuceniu skrypty się wykonają z zawartą w nich konfiguracją (z możliwoscią nadpsiania tego co już jest) o ile nazwy plików są inne niż te które sie już wczesniej wykonały i są zapamiętane w `store/gitlab/config-before-start-done` i `store/gitlab/config-after-start-done`
 
 ### 4. 🔐 Korzystanie z projektu
 
@@ -238,6 +357,60 @@ cat ./storage/gitlab/config/initial_root_password
 📌 **Uwaga**: Plik ten jest automatycznie usuwany po pierwszym `gitlab-ctl reconfigure` lub po 24 godzinach.
 
 ---
+
+## 🧩 Moduł: Nginx (Reverse Proxy)
+
+### 📌 Podstawowe informacje
+
+- **Nazwa kontenera:** `nginx_proxy`
+- **IP:** `172.0.10.2`
+- **Domena:** `*.company.local`
+- **Porty wystawione przez kontener:**
+  - `80` – obsługa żądań HTTP (automatyczne przekierowanie na HTTPS)
+  - `443` – obsługa żądań HTTPS (dzięki lokalnemu certyfikatowi SSL)
+- **Certyfikat SSL:** samopodpisany certyfikat TLS generowany lokalnie przy pierwszym uruchomieniu, domyślnie dla `*.company.local`
+- **Rola:** pośrednik (reverse proxy), który przekazuje ruch do odpowiednich kontenerów Docker na podstawie domeny
+
+---
+
+### 🛠️ Rola w projekcie
+
+Moduł Nginx pełni rolę centralnego punktu wejścia dla wszystkich aplikacji webowych uruchomionych w środowisku Docker Compose. Dzięki reverse proxy:
+
+- wszystkie serwisy są dostępne przez HTTP/HTTPS bez konieczności korzystania z portów innych niż `80`/`443`
+- możliwe jest uruchamianie wielu aplikacji webowych na jednym hoście
+
+---
+
+### 🔀 Przekierowania i routing
+
+| Domena                   | Docelowy kontener | Protokół | Uwagi                                 |
+|--------------------------|-------------------|----------|----------------------------------------|
+| `gitlab.company.local`   | `gitlab_server`   | HTTPS    | Dostęp do interfejsu GitLab            |
+| `mailhog.company.local`  | `mailhog`         | HTTP     | Interfejs testowej skrzynki mailowej  |
+| <span style="color:orange;">(TODO)</span>`api.company.local`      | `api_backend`     | HTTPS    | (Przykład) Interfejs backendowy        |
+| <span style="color:orange;">(TODO)</span>`app.company.local`      | `frontend_app`    | HTTPS    | (Przykład) Interfejs frontendowy       |
+
+> 📌 **Uwaga:** Aby routing działał poprawnie, każda domena musi być dodana do pliku `/etc/hosts` lub obsługiwana przez lokalny DNS.
+
+---
+
+### 📁 Struktura katalogów i konfiguracji
+
+#### 1. `/etc/nginx/nginx.conf`(w kontenerze)
+
+- Zawiera plik `nginx.conf`
+- Montowany z katalogu na hoscie: `./storage/nginxReverseProxy/config/`
+- Odpowiada za konfigurację Nginx jako Reverse Proxy
+
+#### 2. `/etc/nginx/ssl/`(w kontenerze)
+
+- Zawiera plik z certyfikatem domeny
+- Montowany z katalogu na hoscie: `./storage/ssl/gitlab/`
+- Odpowiada przekazanie certyfikatu domeny aby można było zrobić przekierowanie do docelowego serwisu (gitLab)
+
+
+*Certyfikat jest generowany przez kontener z GitLabem i podczas uruchamiana kopoiowany do volumenu aby ngnix mógł z niego korzystać*
 
 ## 🧩 Moduł: GitLab
 
@@ -263,12 +436,18 @@ GitLab działa z trzema głównymi katalogami konfiguracyjnymi:
 - Jest kopiowany z hosta i inicjalizowany przy starcie kontenera
 - Odpowiada za:
   - Uruchomienie usług systemowych (np. `gitlab-ctl`)
+  - Skopiowanie certyfikatu domeny (ze względu na nadpisanie wolumenem)
   - Skopiowanie konfiguracji `gitlab.rb` (ze względu na nadpisanie wolumenem)
   - Konfiguracja systemy przed startem np. modyfikacja pliku `gitlab.rb` (plik: configure-before-start.sh)
   - Wykonanie `gitlab-ctl reconfigure`
   - Konfiguracja systemy dla której jest potrzebny uruchomiony GitLab (plik: configure-after-start.sh)
 
-#### 2. `/gitlab-config/before` → `$CONFIGURE_BEFORE_START`
+#### 2. `/etc/gitlab/ssl`(w kontenerze) → `$SSL_CERTIFICATE_DIR`
+
+- Zawiera plik z certyfikatem domeny
+- Montowany z hosta z katalogu: `./storage/ssl/gitlab/`
+
+#### 3. `/gitlab-config/before` → `$CONFIGURE_BEFORE_START`
 
 - Katalog należy zasilić np poleceniem
 
@@ -285,7 +464,7 @@ GitLab działa z trzema głównymi katalogami konfiguracyjnymi:
   - Wymagają unikalnej nazwy i numerowania (`01_`, `02_` itd.)
   - Pozwalają przetrwać restart kontenera bez utraty konfiguracji
 
-#### 3. `/gitlab-config/before-done` → `$CONFIGURE_BEFORE_START_DONE`
+#### 4. `/gitlab-config/before-done` → `$CONFIGURE_BEFORE_START_DONE`
 
 - Zawiera **skrypty, które zostały już wykonane**
 - Automatycznie uzuełniane po wykonaniu skryptu
@@ -294,7 +473,7 @@ GitLab działa z trzema głównymi katalogami konfiguracyjnymi:
   - Pomijane przy kolejnym uruchamianiu
   - Pozwalają na zachowanie stanu konfiguracji nawet po restarcie kontenera
 
-#### 4. `/gitlab-config/after` → `$CONFIGURE_AFTER_START`
+#### 5. `/gitlab-config/after` → `$CONFIGURE_AFTER_START`
 
 - Katalog należy zasilić np poleceniem
 
@@ -311,7 +490,7 @@ GitLab działa z trzema głównymi katalogami konfiguracyjnymi:
   - Wymagają unikalnej nazwy i numerowania (`01_`, `02_` itd.)
   - Pozwalają przetrwać restart kontenera bez utraty konfiguracji
 
-#### 5. `/gitlab-config/after-done` → `$CONFIGURE_AFTER_START_DONE`
+#### 6. `/gitlab-config/after-done` → `$CONFIGURE_AFTER_START_DONE`
 
 - Zawiera **skrypty, które zostały już wykonane**
 - Automatycznie uzuełniane po wykonaniu skryptu
@@ -358,20 +537,20 @@ Odpowiada za:
 
 ---
 
-### 📝 Dostępne Skrypty
+### 📝 Dostępne Skrypty <span style="color:orange;">(TODO)</span>
 
 Projekt bazowo posiada kilka skryptów do konfiguracji GitLaba, w miarę rozwoju projektu będą one uzupełniane gdy zajdzie taka potrzeba lub w celach szkoleniowych
 
 #### Konfiguracje przed uruchomieniem GitLaba
 
-##### [TODO - ta konfiguracja jeszcze jest w Dockerfile] Ustawienie `external_url' - 01_set_external_url.sh
+##### [<span style="color:orange;">(TODO)</span> - ta konfiguracja jeszcze jest w Dockerfile] Ustawienie `external_url' - 01_set_external_url.sh
 
 Opis:
 Zmienne: w pliku .conf
 
 - lista które są wykorzystywane
 
-##### [TODO - ta konfiguracja jeszcze jest w Dockerfile] Wygenerowanie i ustawienie certyfikatu ssl - 02_generate_and_configurate_ssl.sh
+##### [<span style="color:orange;">(TODO)</span> - ta konfiguracja jeszcze jest w Dockerfile] Wygenerowanie i ustawienie certyfikatu ssl - 02_generate_and_configurate_ssl.sh
 
 Opis:
 Zmienne: katalog: 02_generate_and_configurate_ssl
@@ -420,7 +599,7 @@ XXXXX jest zależne czy skrypt ma się wykonać przed startem czy po pełnym ud
 4. Uruchom ponownie kontener:
    docker compose restart gitlab_server
 5. Skrypt zostanie wykonany automatycznie, o ile nie znajduje się w `./storage/gitlab/config-XXXXX-start-done/`
-6. Jeżeli plik konfiguracyjny ma być stale zachowany (obecny katalog może być wyczyszczony przez polecenie z punktu [3.2.2 Usuwanie konfiguracji ...](#322-usuwa-zawartosc-konfiguracji-beforeafter)) należy przenieść skrypt `XX_nazwa.sh` (i jego katalog o ile występuje `XX_nazwa`) do GitLab/config/XXXXX-start
+6. Jeżeli plik konfiguracyjny ma być stale zachowany (obecny katalog może być wyczyszczony przez polecenie z punktu [3.2.3.2 Usuwanie konfiguracji ...](#3232-usuwa-zawartość-konfiguracji-beforeafter)) należy przenieść skrypt `XX_nazwa.sh` (i jego katalog o ile występuje `XX_nazwa`) do GitLab/config/XXXXX-start
 
 ---
 
@@ -451,14 +630,14 @@ MailHog nie wymaga trwałego wolumenu — nie jest kluczowe, by zachować histor
 
 Po uruchomieniu kontenera, interfejs użytkownika MailHoga będzie dostępny pod adresem:
 
-```
-http://localhost:8025
+``` bash
+http://172.0.10.4:8025/
 ```
 
 Lub, jeśli została zmapowana domena:
 
-```
-http://mailhog.local:8025
+``` bash
+http://email.company.local
 ```
 
 📌 **Uwaga:** Domyślnie interfejs nie posiada uwierzytelnienia, dlatego nie należy wystawiać go na zewnątrz sieci lokalnej.
@@ -492,6 +671,23 @@ Przykład:
 make gitLab-clean-storage
 lub
 ./tools/gitlab/clean-storage.sh
+```
+
+### Ogólne
+
+Znajdują się w katalogu tools/
+
+#### 1 🧹 Remove Certificat SSL
+
+Skrypt `remove-cert-ssl.sh` usuwa certyfikat z hosta który jest wykorzystywany przez ngnix (do przekierowania) i GitLaba do połączenia się po https. Certyfikat ten jest lokalnie generowany przy starcie gitlaba więce to narzędzie pozwala przywrócić strukturę projektu do bazowej postaci.
+
+##### 1.1 🔧 Uruchomienie
+
+``` bash
+make remove-ssl-cert
+lub
+./tools/remove-cert-ssl.sh
+
 ```
 
 ### GitLab
@@ -634,6 +830,42 @@ Przydatny gdy:
 
 - Chcesz zastosować nową konfigurację po uruchomieniu GitLaba, np. widocznosć repozytoriów, mozliwośćrejestracji.
 - Przywracasz konfigurację z repozytorium po użyciu skryptu [3 🧹 Clean Configuration After Start](#3--clean-configuration-after-start).
+
+### ngnix
+
+Znajdują się w katalogu tools/ngnixReverseProxy
+
+#### 1 🧹 Clean configuration
+
+Skrypt `clean-nginx-storage.sh` usuwa konfigurację servera ngnix, która jest w całości dostarczana prze podmontowanie folderu
+
+##### 1.1 🔧 Uruchomienie
+
+``` bash
+make nginx-clean
+lub
+./tools/nginxReverseProxy/clean-nginx-storage.sh
+```
+
+##### 1.2 🔧 Działanie skryptu
+
+Usunięcie konfiguracji z folderu `storage/ngnixReverseProxy/`
+
+#### 2 📝 Copy configuration
+
+Skrypt `clean-nginx-storage.sh` kopiuje konfigurację servera ngnix.
+
+##### 2.1 🔧 Uruchomienie
+
+``` bash
+make nginx-clean
+lub
+./tools/nginxReverseProxy/clean-nginx-storage.sh
+```
+
+##### 2.2 🔧 Działanie skryptu
+
+Kopiuje konfigurację (`ngnix.conf`) z folderu `ngnixReverseProxy/config/` do `storage/ngnixReverseProxy/conf/`
 
 ---
 
