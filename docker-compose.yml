@@ -15,6 +15,22 @@ services:
     depends_on:
       - gitlab_server
       - mailhog
+  bastion:
+    build: 
+      context: ./BastionHost
+      dockerfile: Dockerfile
+    container_name: BastionHost
+    hostname: 172.0.10.3
+    image: cent-os-stream-image
+    tty: true
+    restart: always
+    volumes:
+      - './storage/a_bastion/user/devops:/home/devops'
+      - './storage/a_bastion/scripts:/my-scripts'
+      - './storage/a_bastion/ansible:/my-ansible'
+    networks:
+      cicd-networks:
+        ipv4_address: 172.0.10.3
   gitlab_server:
     build: 
       context: ./GitLab
@@ -42,10 +58,15 @@ services:
       - './storage/gitlab/config-before-start-done:/gitlab-config/before-done'
       - './storage/gitlab/config-after-start:/gitlab-config/after'
       - './storage/gitlab/config-after-start-done:/gitlab-config/after-done'
+      # home
+      - './storage/gitlab/user:/home'
+      # permision
+      - './storage/gitlab/ssh:/etc/ssh'
+      - './storage/gitlab/etc/sudoers.d:/etc/sudoers.d'
     shm_size: '256m'
     networks:
       cicd-networks:
-        ipv4_address: 172.0.10.3
+        ipv4_address: 172.0.10.4
   mailhog:
     image: mailhog/mailhog
     container_name: Mailhog
@@ -55,7 +76,7 @@ services:
     #   - "1025:1025"   # SMTP
     networks:
       cicd-networks:
-        ipv4_address: 172.0.10.4
+        ipv4_address: 172.0.10.5
 
 networks:
   cicd-networks:

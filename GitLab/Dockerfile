@@ -1,4 +1,57 @@
-FROM ubuntu:24.04
+FROM ubuntu:24.04 AS ubuntu-with-ssh
+
+ARG USER_NAME=admin
+
+# Comment out PS1 assignments in /etc/skel/.bashrc
+# This ensures that new users will inherit the global prompt defined in /etc/bash.bashrc,
+# instead of using the default user-specific prompt.
+# This helps keep a consistent shell appearance across all users (e.g., for SSH logins).
+RUN sed -i 's/^\s*\(PS1=.*\)$/# \1/' /etc/skel/.bashrc && \
+    sed -i 's/^\s*\(PS1\s*=\)/# \1/' /etc/skel/.bashrc && \
+    sed -i 's/^\s*\(case.*PS1=.*\)$/# \1/' /etc/skel/.bashrc
+
+# User setup
+RUN useradd -m -G sudo -s /bin/bash "$USER_NAME" &&\
+    echo "$USER_NAME:$USER_NAME" | chpasswd &&\
+    chown -R ${USER_NAME}:${USER_NAME} /home/${USER_NAME}
+
+RUN apt-get update && \
+    # we use ex
+    apt-get -y --no-install-recommends install vim-tiny && \
+    apt-get install -y sudo nano openssh-server && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Configure SSHD.
+# SSH login fix. Otherwise user is kicked off after login
+RUN sed 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' -i /etc/pam.d/sshd && \
+    bash -c 'install -m755 <(printf "#!/bin/sh\nexit 0") /usr/sbin/policy-rc.d' && \
+    ex +'%s/^#\zeListenAddress/\1/g' -scwq /etc/ssh/sshd_config && \
+    ex +'%s/^#\zeHostKey .*ssh_host_.*_key/\1/g' -scwq /etc/ssh/sshd_config && \
+    # Disable SSH login as root user
+    sed -i 's@^#\?PermitRootLogin.*@PermitRootLogin no@' /etc/ssh/sshd_config
+
+# User configure
+RUN mkdir -p /etc/sudoers.d
+RUN echo "$USER_NAME ALL=(ALL:ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$USER_NAME" && \
+    chmod 0440 "/etc/sudoers.d/$USER_NAME"
+
+# Ensure only the specified user(s) can connect via SSH.
+# If AllowUsers exists, append the user if not already present.
+# If not, create a new AllowUsers line with the user.
+RUN set -eux; \
+    if grep -q '^AllowUsers' /etc/ssh/sshd_config; then \
+        grep -q "\<$USER_NAME\>" /etc/ssh/sshd_config || \
+        sed -i "/^AllowUsers/ s/$/ $USER_NAME/" /etc/ssh/sshd_config; \
+    else \
+        echo "AllowUsers $USER_NAME" >> /etc/ssh/sshd_config; \
+    fi
+
+RUN ssh-keygen -A
+RUN mkdir -p /run/sshd
+
+CMD ["/usr/sbin/sshd", "-D"]
+
+FROM ubuntu-with-ssh
 
 # Base directory for startup and configuration scripts
 ARG BASE_SCRIPTS_DIR=/startScript
@@ -16,6 +69,18 @@ ENV CONFIGURE_AFTER_START_DONE=${CONFIGURATION_DIR}/after-done
 # Path to GitLab's main configuration file
 ENV CONFIG_FILE=/etc/gitlab/gitlab.rb
 ENV CONFIG_FILE_TMP=/tmp/gitlab.rb
+# Path to ssh main configuration file
+ENV SSH_CONFIG_DIR=/etc/ssh
+ENV SSH_CONFIG_DIR_TMP=/tmp/ssh
+
+ENV PROFILE_D_DIR=/etc/profile.d
+ENV PROFILE_D_DIR_TMP=/tmp/profile.d
+
+ENV SUDOERS_D_DIR=/etc/sudoers.d
+ENV SUDOERS_D_DIR_TMP=/tmp/sudoers.d
+
+ENV HOME_DIR=/home
+ENV HOME_DIR_TMP=/tmp/home
 
 # Domain for GitLab instance (used in SSL certificate and configuration)
 ENV DOMAIN=gitlab.company.local
@@ -31,10 +96,7 @@ ENV SSL_CERTIFICATE_DIR_TMP=/ssl
 
 # Install basic tools
 RUN apt-get update
-RUN apt-get install -y nano
-# we not use ex
-# RUN apt-get -y --no-install-recommends install vim-tiny
-RUN apt-get install -y curl openssh-server ca-certificates tzdata perl
+RUN apt-get install -y curl ca-certificates tzdata perl
 
 # Add GitLab repository and install GitLab CE
 RUN curl -s https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | bash
@@ -58,10 +120,10 @@ RUN apt-get install -y netcat-traditional
 
 # Install OpenSSL and prepare SSL folder
 RUN apt install openssl -y
-RUN mkdir -p ${SSL_CERTIFICATE_DIR}
-RUN chmod 700 ${SSL_CERTIFICATE_DIR}
-RUN mkdir -p ${SSL_CERTIFICATE_DIR_TMP}
-RUN chmod 700 ${SSL_CERTIFICATE_DIR_TMP}
+RUN mkdir -p ${SSL_CERTIFICATE_DIR} && \
+    chmod 700 ${SSL_CERTIFICATE_DIR} && \
+    mkdir -p ${SSL_CERTIFICATE_DIR_TMP} && \
+    chmod 700 ${SSL_CERTIFICATE_DIR_TMP}
 
 # Generate self-signed certificate for local domain
 RUN openssl req -newkey rsa:2048 -nodes -keyout /ssl/gitlab.company.local.key \
@@ -89,17 +151,22 @@ RUN LOCAL_DOMAIN=$DOMAIN && \
 # --- END SSL CONFIGURATION ---
 
 # Save backup of gitlab.rb when mounting config
-RUN cp $CONFIG_FILE $CONFIG_FILE_TMP
-
-# Create necessary directories
-RUN mkdir ${BASE_SCRIPTS_DIR}
-
-
-RUN mkdir ${CONFIGURATION_DIR}
-RUN mkdir ${CONFIGURE_BEFORE_START}
-RUN mkdir ${CONFIGURE_BEFORE_START_DONE}
-RUN mkdir ${CONFIGURE_AFTER_START}
-RUN mkdir ${CONFIGURE_AFTER_START_DONE}
+RUN cp $CONFIG_FILE $CONFIG_FILE_TMP && \
+    mkdir -p $SSH_CONFIG_DIR_TMP && \
+    mkdir -p $SUDOERS_D_DIR_TMP && \
+    mkdir -p $PROFILE_D_DIR_TMP && \
+    mkdir -p $HOME_DIR_TMP && \
+    cp -r $SSH_CONFIG_DIR/* $SSH_CONFIG_DIR_TMP/ && \
+    cp -r $SUDOERS_D_DIR/* $SUDOERS_D_DIR_TMP/ && \
+    cp -r $PROFILE_D_DIR/* $PROFILE_D_DIR_TMP/ && \
+    cp -r $HOME_DIR/* $HOME_DIR_TMP/ && \
+    # Create necessary directories
+    mkdir ${BASE_SCRIPTS_DIR} && \
+    mkdir ${CONFIGURATION_DIR} && \
+    mkdir ${CONFIGURE_BEFORE_START} && \
+    mkdir ${CONFIGURE_BEFORE_START_DONE} && \
+    mkdir ${CONFIGURE_AFTER_START} && \
+    mkdir ${CONFIGURE_AFTER_START_DONE}
 
 
 # Copy startup script
@@ -113,11 +180,14 @@ RUN chmod +x ${BASE_SCRIPTS_DIR}/configure-before-start.sh
 COPY configure-after-start.sh ${BASE_SCRIPTS_DIR}/configure-after-start.sh
 RUN chmod +x ${BASE_SCRIPTS_DIR}/configure-after-start.sh
 
+# Add prompt configuration
+RUN echo 'export PS1="\[\033[0;34m\][gitLab]\[\033[00m\] \[\033[1;31m\]\u@\H:\w\[\033[00m\] \$ "' >> /etc/bash.bashrc
+
 # Open required ports
 EXPOSE 80 22 443
 
 # Default command (runs GitLab and configuration scripts)
-CMD ["/startScript/startGitLab.sh", "-D"]
+CMD ["/bin/bash","/startScript/startGitLab.sh", "-D"]
 
 # Alternative: keep container running without starting GitLab (for debugging)
 # CMD ["tail", "-f", "/dev/null"]

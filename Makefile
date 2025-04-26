@@ -2,6 +2,8 @@
  help \
  cleanAll \
  startConfigurationAll \
+ bastion-set-permision \
+ bastion-clean \
  gitLab \
  gitLab-clean-storage \
  gitLab-clean-configuration-before-start \
@@ -16,6 +18,7 @@ help:
 
 # Clean all related directories and files: GitLab storage, configuration folders, nginx storage, and SSL certificates
 cleanAll:
+	$(MAKE) bastion-clean
 	$(MAKE) gitLab-clean-storage
 	$(MAKE) gitLab-clean-configuration-before-start
 	$(MAKE) gitLab-clean-configuration-after-start
@@ -24,6 +27,7 @@ cleanAll:
 
 # Copy all required configuration files for services startup (GitLab before/after and Nginx)
 startConfigurationAll:
+	$(MAKE) bastion-set-permision
 	$(MAKE) gitLab-copy-configuration-before-start
 	$(MAKE) gitLab-copy-configuration-after-start
 	$(MAKE) nginx-copy-config
@@ -31,6 +35,12 @@ startConfigurationAll:
 # Remove the entire storage/ssl directory and its contents
 remove-ssl-cert:
 	bash tools/remove-cert-ssl.sh
+
+bastion-set-permision:
+	bash tools/bastion/set-default-permision.sh
+
+bastion-clean:
+	bash tools/bastion/clean-storage.sh 
 
 gitLab:
 	bash tools/gitlab/clean-storage.sh && \

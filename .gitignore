@@ -6,5 +6,7 @@
 storage/*
 
 
+!storage/a_bastion/ansible/.gitkeep
+!storage/a_bastion/scripts/.gitkeep
 !storage/gitlab/config-after-start/.gitkeep 
 !storage/gitlab/config-before-start/.gitkeep
